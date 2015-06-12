@@ -161,7 +161,8 @@ def initialize() {
 	delete.each { deleteChildDevice(it.deviceNetworkId) }
     
     // Schedule polling
-    schedule("0 0/" + (settings.polling.toInteger() > 0 )? settings.polling.toInteger() : 1  + " * * * ?", refresh )
+	schedulePoll()
+    schedule("19 0/" + 5 + " * * * ?", monitorPoll )
 }
 
 /* Access Management */
@@ -424,4 +425,42 @@ def sendStopAll() {
 	pause(2000)
 	refresh()
 	return true
+}
+
+def monitorPoll(){
+    try {
+        log.debug "Monitoring the RainMachine poll...Last poll stamp: " + state.polling.last
+        if (now() > state.polling.last + ((settings.polling.toInteger() > 0 )? settings.polling.toInteger() : 1)*100000*2){
+            log.debug "RainMachine polling schedule needs reboot!"
+            sendAlert("RainMachine schedule is dead! Restart!")
+            reSchedulePoll()
+        }
+    } catch (Error e)	{
+		log.debug "Error in RainMachine monitorPoll: $e"
+        //sendAlert("Error in RainMachine monitorPoll: $e")
+	}
+    
+}
+
+private schedulePoll() {
+    log.debug "Creating RainMachine schedule..."
+    unschedule()
+	schedule("37 0/" + ((settings.polling.toInteger() > 0 )? settings.polling.toInteger() : 1)  + " * * * ?", refresh )
+    log.debug "RainMachine schedule successfully started!"   
+}
+
+private reSchedulePoll() {
+    try {
+        log.debug "Attempting to recreate the RainMachine schedule..."
+        schedule("37 0/" + ((settings.polling.toInteger() > 0 )? settings.polling.toInteger() : 1)  + " * * * ?", refresh )
+        log.debug "RainMachine schedule successfully restarted!"
+        //sendAlert("RainMachine schedule successfully restarted!")
+	} catch (Error e)	{
+		log.debug "Error restarting RainMachine schedule: $e"
+        //sendAlert("Error restarting RainMachine schedule: $e")
+	}
+}
+
+def sendAlert(alert){
+	sendSms("555-555-5555", "Alert: " + alert)
 }

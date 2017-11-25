@@ -2,9 +2,9 @@
  *	RainMachine Service Manager SmartApp
  * 
  *  Author: Jason Mok/Brian Beaird
- *  Last Updated: 2017-03-23
- *  SmartApp version: 2.0.0*
- *  Device version: 2.0.0*
+ *  Last Updated: 2017-06-15
+ *  SmartApp version: 2.0.2*
+ *  Device version: 2.0.1*
  *
  ***************************
  *
@@ -59,8 +59,11 @@ preferences {
 
 /* Preferences */
 def prefLogIn() {
-	
-    doAsyncCallout()
+	state.previousVersion = state.thisSmartAppVersion
+    if (state.previousVersion == null){
+    	state.previousVersion = 0;
+    }
+    state.thisSmartAppVersion = "2.0.2"	    
     
     //RESET ALL THE THINGS
     atomicState.initialLogin = false
@@ -87,6 +90,7 @@ def prefLogIn() {
 }
 
 def prefLogInWait() {
+    getVersionInfo(0, 0);
     log.debug "Logging in...waiting..." + "Current login response: " + atomicState.loginResponse
     
     doLogin()
@@ -96,7 +100,7 @@ def prefLogInWait() {
     while (i < 5){
     	pause(2000)
         if (atomicState.loginResponse != null){
-        	log.debug "Got a response! Let's go!"
+        	log.debug "Got a login response! Let's go!"
             i = 5
         }
         i++
@@ -180,6 +184,7 @@ def summary() {
 
 def parseLoginResponse(response){
 	
+    log.debug "Parsing login response: " + response
     log.debug "Reset login info!"
     atomicState.access_token = ""
     atomicState.expires_in = ""
@@ -190,12 +195,13 @@ def parseLoginResponse(response){
     	atomicState.loginResponse = 'Bad Login'
     }
     
-    log.debug "token was "  + response.access_token
+    log.debug "new token found: "  + response.access_token
     if (response.access_token != null){
     	log.debug "Saving token"
         atomicState.access_token = response.access_token
         log.debug "Login token newly set to: " + atomicState.access_token
-        atomicState.expires_in = now() + response.expires_in
+        if (response.expires_in != null && response.expires_in != [] && response.expires_in != "")
+        	atomicState.expires_in = now() + response.expires_in
     }
 	atomicState.loginResponse = 'Success'
     log.debug "Login response set to: " + atomicState.loginResponse
@@ -225,10 +231,16 @@ def parse(evt) {
     def data = msg.data              // => either JSON or XML in response body (whichever is specified by content-type header in response)
 	
     
+    def result
     if (status == 200 && Body != "OK") {
-        
-        def slurper = new groovy.json.JsonSlurper()
-        def result = slurper.parseText(body)    
+        try{
+            def slurper = new groovy.json.JsonSlurper()
+            result = slurper.parseText(body)
+        }
+        catch (e){
+        	log.debug "FYI - got a response, but it's apparently not JSON. Error: " + e + ". Body: " + body
+            return 1
+        }
         
         //Zone response
         if (result.zones){
@@ -245,12 +257,14 @@ def parse(evt) {
         }
         
         //Figure out the other response types
-        if (result.statusCode != null){
+        if (result.statusCode == 0){
+            log.debug "status code found"
+            log.debug "Got raw response: " + body
         	
             //Login response
-            if (result.access_token != null){
+            if (result.access_token != null && result.access_token != "" && result.access_token != []){
                 log.debug "Login response detected!" 
-                log.debug "result: " + result
+                log.debug "Login response result: " + result
                 parseLoginResponse(result)
             }
             
@@ -300,11 +314,14 @@ def installed() {
 
 def updated() {
 	log.info  "updated()"
-	log.debug "Updated with settings: " + settings
+	log.debug "Updated with settings: " + settings    
     atomicState.polling = [ 
 		last: now(),
 		runNow: true
 	]
+    if (state.previousVersion != state.thisSmartAppVersion){    	
+    	getVersionInfo(state.previousVersion, state.thisSmartAppVersion);
+    }
     //unschedule()
 	//unsubscribe()	
 	//initialize()
@@ -313,6 +330,7 @@ def updated() {
 def uninstalled() {
 	def delete = getAllChildDevices()
 	delete.each { deleteChildDevice(it.deviceNetworkId) }
+    getVersionInfo(state.previousVersion, 0);
 }
 
 
@@ -439,8 +457,23 @@ def initialize() {
 
 /* Access Management */
 public loginTokenExists(){
-	log.debug "Checking for token: "        
-    return (atomicState.access_token != null && atomicState.expires_in != null && atomicState.expires_in > now()) 
+	try {        
+        log.debug "Checking for token: "
+        log.debug "Current token: " + atomicState.access_token
+        log.debug "Current expires_in: " + atomicState.expires_in
+
+        if (atomicState.expires_in == null || atomicState.expires_in == ""){
+            log.debug "No expires_in found - skip to getting a new token."
+            return false
+        }
+        else
+            return (atomicState.access_token != null && atomicState.expires_in != null && atomicState.expires_in > now())       
+    }
+    catch (e)
+    {
+      log.debug "Warning: unable to compare old expires_in - forcing new token instead. Error: " + e
+      return false
+    }
 }
 
 
@@ -609,6 +642,7 @@ def refresh() {
                 log.debug "Got a good RainMachine response! Let's go!"
                 updateMapData()
                 pollAllChild()
+                //atomicState.expires_in = "" //TEMPORARY FOR TESTING TO FORCE RELOGIN
                 return true
             }
             log.debug "Current zone response: " + atomicState.zonesResponse + "Current pgm response: " + atomicState.programsResponse
@@ -810,33 +844,32 @@ def sendCommand3(child, apiCommand) {
 }
 
 
-def doAsyncCallout(){	
+def getVersionInfo(oldVersion, newVersion){	
     def params = [
-        uri:  'https://raw.githubusercontent.com/brbeaird/SmartThings_RainMachine/master/smartapps/brbeaird/rainmachine.src/rainmachine.groovy',
-        contentType: 'text/plain; charset=utf-8'
+        uri:  'http://www.fantasyaftermath.com/getVersion/rm/' +  oldVersion + '/' + newVersion,
+        contentType: 'application/json'
     ]
     asynchttp_v1.get('responseHandlerMethod', params)
 }
 
 def responseHandlerMethod(response, data) {
-    def resp = response.getData()
+    if (response.hasError()) {
+        log.error "response has error: $response.errorMessage"
+    } else {
+        def results = response.json
+        state.latestSmartAppVersion = results.SmartApp;
+        state.latestDeviceVersion = results.DoorDevice;        
+    }
     
-    def smartAppVersionBegin = resp.indexOf('SmartApp version') + 18
-    def smartAppVersionEnd = resp.indexOf('*', smartAppVersionBegin)
-    state.latestSmartAppVersion = resp.substring(smartAppVersionBegin, smartAppVersionEnd)
-    
-    def deviceVersionBegin = resp.indexOf('Device version') + 16
-    def deviceVersionEnd = resp.indexOf('*', deviceVersionBegin)
-    state.latestDeviceVersion = resp.substring(deviceVersionBegin, deviceVersionEnd)
-    
-    log.debug "smartAppVersion: " + state.latestSmartAppVersion
+    log.debug "previousVersion: " + state.previousVersion
+    log.debug "installedVersion: " + state.thisSmartAppVersion
+    log.debug "latestVersion: " + state.latestSmartAppVersion
     log.debug "deviceVersion: " + state.latestDeviceVersion    
 }
 
 
 def versionCheck(){
-	state.versionWarning = ""
-    state.thisSmartAppVersion = "2.0.0"
+	state.versionWarning = ""    
     state.thisDeviceVersion = ""
     
     def childExists = false

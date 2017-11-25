@@ -2,7 +2,7 @@
  *	RainMachine Smart Device
  *
  *	Author: Jason Mok/Brian Beaird
- *  Last Updated: 2017-03-23
+ *  Last Updated: 2017-10-18
  *
  ***************************
  *
@@ -52,9 +52,9 @@ metadata {
 	simulator { }
 
 	tiles {
-		standardTile("contact", "device.contact", width: 2, height: 2, canChangeIcon: true) {
-			state("closed",  label: 'inactive', action: "valve.open",  icon: "st.Outdoor.outdoor12", backgroundColor: "#ffffff", nextState: "opening")
-			state("open",    label: 'active',   action: "valve.close", icon: "st.Outdoor.outdoor12", backgroundColor: "#1e9cbb", nextState: "closing")		
+		standardTile("contact", "device.switch", width: 2, height: 2, canChangeIcon: true) {
+			state("off",  label: 'inactive', action: "valve.open",  icon: "st.Outdoor.outdoor12", backgroundColor: "#ffffff", nextState: "open")
+			state("on",    label: 'active',   action: "valve.close", icon: "st.Outdoor.outdoor12", backgroundColor: "#00a0dc", nextState: "closed")		
 			//state("opening", label: 'pending',  action: "valve.close", icon: "st.Outdoor.outdoor12", backgroundColor: "#D4741A")
             state("opening", label: '${name}',  icon: "st.Outdoor.outdoor12", backgroundColor: "#D4741A")
             state("closing", label: '${name}',  icon: "st.Outdoor.outdoor12", backgroundColor: "#D4741A")
@@ -108,26 +108,28 @@ def installed() {
 
 // turn on sprinkler
 def open()  { 
-    //sendEvent(name: "contact", value: "opening", display: true, displayed: false)   
+    log.debug "Turning the sprinkler on (valve)"
+    deviceStatus(1)
     parent.sendCommand2(this, "start", (device.currentValue("runTime") * 60))
     //parent.sendCommand3(this, 1)
-    //poll()
 }
 // turn off sprinkler
 def close() { 
-    //sendEvent(name: "contact", value: "closing", display: true, displayed: false)
+	log.debug "Turning the sprinkler off (valve)"
+    deviceStatus(0)
     parent.sendCommand2(this, "stop",  (device.currentValue("runTime") * 60)) 
     //parent.sendCommand3(this, 0)
-    //poll()
 }
 
 
 def on() { 
-	log.debug "Turning the sprinkler on"	
+	log.debug "Turning the sprinkler on"
+    deviceStatus(1)
     parent.sendCommand2(this, "start", (device.currentValue("runTime") * 60))    
 }
 def off() { 
-log.debug "Turning the sprinkler off"	
+	deviceStatus(0)
+	log.debug "Turning the sprinkler off"	
     parent.sendCommand2(this, "stop",  (device.currentValue("runTime") * 60)) 
 }
 // refresh status
@@ -159,7 +161,7 @@ def poll() {
 
 // stop everything
 def stopAll() {
-	sendEvent(name: "contact", value: "closing", display: true, displayed: false)
+	sendEvent(name: "valve", value: "closed", display: true, displayed: false)
     parent.sendCommand2(this, "stopall",  (device.currentValue("runTime") * 60))
     
     //parent.sendStopAll()
@@ -194,20 +196,23 @@ def updateDeviceStatus(status){
 
 // update status
 def deviceStatus(status) {
-	log.debug "Old Device Status: " + device.currentValue("contact")
-    log.debug "New Device Status: " + status
-    
+	def oldStatus = device.currentValue("valve")
+	log.debug "Old Device Status: " + device.currentValue("valve")
+    log.debug "New Device Status: " + status    
 	
     if (status == 0) {	//Device has turned off
-		
-        //Go ahead and mark the valve as closed
-        def oldStatus = device.currentValue("contact")
-        sendEvent(name: "switch", value: "off", display: true, displayed: false, isStateChange: true)		// off == closed
-        sendEvent(name: "contact", value: "closed",   display: false, displayed: false)
+        
+ 		//Handle null values
+		if (oldStatus == null){
+     		sendEvent(name: "switch", value: "off", display: true, displayed: false, isStateChange: true)		// off == closed		
+ 			sendEvent(name: "valve", value: "closed",   display: false, displayed: false)
+        }
         
         //If device has just recently closed, send notification
         if (oldStatus != 'closed' && oldStatus != null){
-        	sendEvent(name: "contact", value: "closed",   display: true, displayed: true, descriptionText: device.displayName + " was inactive")            
+        	log.debug "Logging status."
+            sendEvent(name: "switch", value: "off", display: true, displayed: false, isStateChange: true)		// off == closed
+            sendEvent(name: "valve", value: "closed", display: true, descriptionText: device.displayName + " was inactive")
 
             //Take note of how long it ran and send notification
             log.debug "lastStarted: " + device.currentValue("lastStarted")
@@ -254,24 +259,19 @@ def deviceStatus(status) {
                 parent.sendPushMessage(message)
     		}
             
-            
-            //sendEvent(name: "pausume", value: "resume")
 		}
         //sendEvent(name: "contact", value: "closed",  display: true, descriptionText: device.displayName + " was inactive")
         
         
 	}
 	if (status == 1) {	//Device has turned on
-		log.debug "Zone turned on!"
-        
-        //Go ahead and mark the valve as closed
-        def oldStatus = device.currentValue("contact")
-        sendEvent(name: "switch", value: "on", display: true, displayed: false, isStateChange: true)		// on == open
-        sendEvent(name: "contact", value: "open",   display: false, displayed: false)        
+		log.debug "Zone turned on!"        
         
         //If device has just recently opened, take note of time
         if (oldStatus != 'open'){
-            sendEvent(name: "contact", value: "open",    display: true, displayed: true, descriptionText: device.displayName + " was active")            
+            log.debug "Logging status."
+            sendEvent(name: "valve", value: "open", display: true, descriptionText: device.displayName + " was active")
+            sendEvent(name: "switch", value: "on", display: true, displayed: false, isStateChange: true)		// on == open
             
             //Take note of current time the zone started
             def refreshDate = new Date()
@@ -282,11 +282,10 @@ def deviceStatus(status) {
             sendEvent(name: "lastStarted", value: now(), display: false , displayed: false)
             log.debug "stored lastStarted as : " + device.currentValue("lastStarted")
             //sendEvent(name: "pausume", value: "pause")
-        }
-        //sendEvent(name: "contact", value: "open",    display: true, descriptionText: device.displayName + " was active")
+        }        
 	}   
 	if (status == 2) {  //Device is pending
-		sendEvent(name: "contact", value: "opening", display: true, descriptionText: device.displayName + " was pending")
+		sendEvent(name: "valve", value: "open", display: true, descriptionText: device.displayName + " was pending")
         //sendEvent(name: "pausume", value: "pause")
 	}
 }
@@ -297,5 +296,5 @@ def log(msg){
 }
 
 def showVersion(){
-	return "2.0.0"
+	return "2.1.0"
 }
